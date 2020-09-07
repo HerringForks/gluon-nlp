@@ -40,7 +40,7 @@ import argparse
 import mxnet as mx
 import gluonnlp as nlp
 try:
-    import horovod.mxnet as hvd
+    import herring.mxnet as hvd
 except ImportError:
     pass
 
@@ -146,8 +146,8 @@ parser.add_argument('--num_max_dataset_cached', type=int, default=0,
 parser.add_argument('--phase2', action='store_true', help='phase 2 training')
 parser.add_argument('--phase1_num_steps', type=int, help='number of steps for phase 1')
 # communication
-parser.add_argument('--comm_backend', type=str, default='device',
-                    choices=['horovod', 'dist_sync_device', 'device'],
+parser.add_argument('--comm_backend', type=str, default='herring',
+                    choices=['herring', 'dist_sync_device', 'device'],
                     help='Communication backend.')
 parser.add_argument('--gpus', type=str, default=None,
                     help='List of gpus to run when device or dist_sync_device is used for '
@@ -196,13 +196,13 @@ class DataParallelBERT(nlp.utils.Parallelizable):
 def init_comm(backend):
     """Init communication backend"""
     # backend specific implementation
-    if backend == 'horovod':
+    if backend == 'herring':
         try:
-            import horovod.mxnet as hvd  # pylint: disable=import-outside-toplevel
+            import herring.mxnet as hvd  # pylint: disable=import-outside-toplevel
         except ImportError:
-            logging.info('horovod must be installed.')
+            logging.info('herring must be installed.')
             sys.exit(1)
-        hvd.init()
+        #hvd.init()
         store = None
         num_workers = hvd.size()
         rank = hvd.rank()
@@ -223,8 +223,9 @@ def init_comm(backend):
 backend = args.comm_backend
 store, num_workers, rank, local_rank, is_master_node, ctxs = init_comm(backend)
 
+import socket
 filename = os.path.join(args.ckpt_dir,
-                        ('phase1_log.' if not args.phase2 else 'phase2_log.') + str(rank))
+                        ('phase1_log.' if not args.phase2 else 'phase2_log.') + str(rank) + '.' + socket.gethostname())
 logging.basicConfig(filename=filename)
 logging.getLogger().setLevel(level)
 logging.info(args)
@@ -241,8 +242,8 @@ def train(data_train, data_eval, model):
     """Training function."""
     # backend specific implementation
     param_dict = model.bert.collect_params()
-    if backend == 'horovod':
-        hvd.broadcast_parameters(param_dict, root_rank=0)
+    #if backend == 'horovod':
+    #    hvd.broadcast_parameters(param_dict, root_rank=0)
 
     mlm_metric = nlp.metric.MaskedAccuracy()
     nsp_metric = nlp.metric.MaskedAccuracy()
@@ -262,8 +263,9 @@ def train(data_train, data_eval, model):
         loss_scale_param = None
 
     # backend specific implementation
-    if backend == 'horovod':
-        trainer = hvd.DistributedTrainer(param_dict, args.optimizer, optim_params)
+    if backend == 'herring':
+        opt = mx.optimizer.create(args.optimizer, **optim_params)
+        trainer = hvd.DistributedTrainer(param_dict, opt)
     else:
         trainer = mx.gluon.Trainer(param_dict, args.optimizer, optim_params,
                                    update_on_kvstore=False)
