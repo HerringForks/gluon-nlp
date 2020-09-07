@@ -308,11 +308,12 @@ def train(data_train, data_eval, model):
     parallel = nlp.utils.Parallel(num_ctxes if num_ctxes > 1 else 0, parallel_model)
 
     while step_num < num_train_steps:
-
-        data_train_iter = iter(data_train)
+        logging.info('Outer loop')
+        data_train_iter = iter(data_train) # data_train is type DatasetLoader, data_train_iter is _MultiBatchWorkerIter
         end_of_batch = False
         next_data_batch = next(data_train_iter)
         while not end_of_batch:
+            logging.info('Inner loop')
             data_batch = next_data_batch
             if step_num >= num_train_steps:
                 break
@@ -349,17 +350,23 @@ def train(data_train, data_eval, model):
                 running_nsp_loss += ls2.as_in_context(mx.cpu()) / len(ctxs)
                 running_num_tks += valid_length.sum().as_in_context(mx.cpu())
             # pre fetch next batch
+            logging.debug('fetch mini-batch step_num %d rank %d', step_num, rank)
             try:
                 next_data_batch = next(data_train_iter)
+                logging.debug('fetch complete')
             except StopIteration:
+                logging.debug('stop iteration')
                 end_of_batch = True
 
             # update
+            logging.debug('allreduce step_num %d rank %d', step_num, rank)
             if (batch_num + 1) % accumulate == 0:
                 fp16_trainer.step(1, max_norm=1.0 * num_workers)
+                logging.debug('allreduce complete')
                 if accumulate > 1:
                     param_dict.zero_grad()
             # update metrics
+            logging.debug('metric step_num %d', step_num)
             if args.no_compute_acc:
                 mask_pred_list[0].wait_to_read()
             else:

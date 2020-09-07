@@ -27,6 +27,9 @@ import pickle
 import warnings
 import multiprocessing
 from functools import partial
+import logging
+import os
+
 from mxnet import context
 from mxnet.gluon.data.dataloader import ForkingPickler, _as_in_context
 from mxnet.gluon.data.dataloader import default_mp_batchify_fn, default_batchify_fn
@@ -36,6 +39,8 @@ from .stream import _PathDataset
 # manager for creating shared object
 _manager = None
 _dataset = None
+
+# worker process will have _manager global var setup, others won't have
 def _initialize_dataset_worker(manager):
     global _manager
     _manager = manager
@@ -47,7 +52,7 @@ def _dataset_worker_fn(urls, dataset_fn, batch_sampler_fn):
     dataset = dataset_fn(urls)
     batch_sampler = batch_sampler_fn(dataset)
     if _manager:
-        dataset = _manager.list(zip(*dataset._data))
+        dataset = _manager.list(zip(*dataset._data)) #proxy for sharing by batch_workers
     _dataset = dataset
     return dataset, batch_sampler
 
@@ -57,7 +62,8 @@ def _batch_worker_fn(samples, batchify_fn, dataset=None, counter=None):
     # pylint: disable=unused-argument
     # it is required that each worker process has to fork a new MXIndexedRecordIO handle
     # preserving dataset as global variable can save tons of overhead and is safe in new process
-    if len(dataset[0]) > 1:
+    logging.debug('_batch start %d', os.getpid())
+    if len(dataset[0]) > 1: # access proxy from server process
         if isinstance(samples[0], (list, tuple)):
             batch = [batchify_fn([dataset[i] for i in shard]) for shard in samples]
         else:
@@ -138,35 +144,41 @@ class _MultiBatchWorkerIter:
                 # Without checking the reference counts of previous datasets in the master process,
                 # the key error can be triggered occasionally. This may be a bug in Python.
                 self._count_dataset_ref(dataset)
-                self._dataset = dataset
+                self._dataset = dataset # proxy object
                 # initialize reference counter
                 if id(dataset) not in self._counter_ref:
                     self._counter_ref[id(dataset)] = self._manager.Value('i', 0)
-                self._batch_iter = iter(batch_sampler)
+                self._batch_iter = iter(batch_sampler) # FixedBucketSampler.__iter__
                 self._push_next()
         else:
             counter = self._counter_ref[id(self._dataset)]
             counter.value += 1
+            logging.debug('_push_next s %d', self._sent_idx)
             async_ret = self._worker_pool.apply_async(
-                self._worker_fn, (r, self._batchify_fn, self._dataset, counter))
+                self._worker_fn, (r, self._batchify_fn, self._dataset, counter)) # batchify process
             self._data_buffer[self._sent_idx] = async_ret
             self._sent_idx += 1
 
     def __next__(self):
+        logging.debug('multi batch __next__ start pid: %d', os.getpid())
         self._push_next()
+        logging.debug('multi batch after push_next')
         if self._rcvd_idx == self._sent_idx:
             assert not self._data_buffer, 'Data buffer should be empty at this moment'
             raise StopIteration
 
         assert self._rcvd_idx < self._sent_idx, 'rcvd_idx must be smaller than sent_idx'
         assert self._rcvd_idx in self._data_buffer, 'fatal error with _push_next, rcvd_idx missing'
+        logging.debug('__next__ r %d', self._rcvd_idx)
         ret = self._data_buffer.pop(self._rcvd_idx)
-        batch, counter = ret.get()
+        batch, counter = ret.get() # main process gets result
         batch = pickle.loads(batch)
         counter.value -= 1
         if self._pin_memory:
             batch = _as_in_context(batch, context.cpu_pinned())
         self._rcvd_idx += 1
+        logging.debug('batch worker pool size %d', len(self._worker_pool._pool))
+        logging.debug('multi batch __next__ finish')
         return batch
 
     def next(self):
@@ -250,12 +262,14 @@ class _MultiDatasetWorkerIter:
 
     def __next__(self):
         """Next dataset"""
+        logging.debug('multi dataset __next__ start')
         self._push_next_dataset()
         result = self._next_dataset()
 
         if result is None:
             raise StopIteration
 
+        logging.debug('multi dataset __next__ finish')
         return result
 
     def next(self):
