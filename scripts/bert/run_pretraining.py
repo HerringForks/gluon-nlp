@@ -158,6 +158,7 @@ args = parser.parse_args()
 nlp.utils.mkdir(args.ckpt_dir)
 level = logging.DEBUG if args.verbose else logging.INFO
 os.environ['MXNET_GPU_MEM_POOL_TYPE'] = 'Round'
+os.environ['MXNET_SAFE_ACCUMULATION'] = 1
 
 class DataParallelBERT(nlp.utils.Parallelizable):
     """Data parallel BERT model.
