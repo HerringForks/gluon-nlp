@@ -308,12 +308,10 @@ def train(data_train, data_eval, model):
     parallel = nlp.utils.Parallel(num_ctxes if num_ctxes > 1 else 0, parallel_model)
 
     while step_num < num_train_steps:
-        logging.info('Outer loop')
         data_train_iter = iter(data_train) # data_train is type DatasetLoader, data_train_iter is _MultiBatchWorkerIter
         end_of_batch = False
         next_data_batch = next(data_train_iter)
         while not end_of_batch:
-            logging.info('Inner loop')
             data_batch = next_data_batch
             if step_num >= num_train_steps:
                 break
