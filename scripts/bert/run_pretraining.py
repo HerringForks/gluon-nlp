@@ -108,7 +108,7 @@ parser.add_argument('--profile', type=str, default=None,
 # data pre-processing
 parser.add_argument('--num_buckets', type=int, default=1,
                     help='Number of buckets for variable length sequence sampling')
-parser.add_argument('--raw', action='store_true',
+parser.add_argument('--raw', type=bool, default=False,
                     help='If set, both training and dev samples are generated on-the-fly '
                          'from raw texts instead of pre-processed npz files. ')
 parser.add_argument('--max_seq_length', type=int, default=512,
@@ -158,7 +158,7 @@ args = parser.parse_args()
 nlp.utils.mkdir(args.ckpt_dir)
 level = logging.DEBUG if args.verbose else logging.INFO
 os.environ['MXNET_GPU_MEM_POOL_TYPE'] = 'Round'
-os.environ['MXNET_SAFE_ACCUMULATION'] = 1
+os.environ['MXNET_SAFE_ACCUMULATION'] = '1'
 
 class DataParallelBERT(nlp.utils.Parallelizable):
     """Data parallel BERT model.
