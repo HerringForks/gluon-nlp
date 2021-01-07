@@ -40,7 +40,7 @@ import argparse
 import mxnet as mx
 import gluonnlp as nlp
 try:
-    import horovod.mxnet as hvd
+    import smdistributed.dataparallel.mxnet as dist
 except ImportError:
     pass
 
@@ -146,8 +146,8 @@ parser.add_argument('--num_max_dataset_cached', type=int, default=0,
 parser.add_argument('--phase2', action='store_true', help='phase 2 training')
 parser.add_argument('--phase1_num_steps', type=int, help='number of steps for phase 1')
 # communication
-parser.add_argument('--comm_backend', type=str, default='device',
-                    choices=['horovod', 'dist_sync_device', 'device'],
+parser.add_argument('--comm_backend', type=str, default='smddp',
+                    choices=['smddp', 'dist_sync_device', 'device'],
                     help='Communication backend.')
 parser.add_argument('--gpus', type=str, default=None,
                     help='List of gpus to run when device or dist_sync_device is used for '
@@ -158,6 +158,7 @@ args = parser.parse_args()
 nlp.utils.mkdir(args.ckpt_dir)
 level = logging.DEBUG if args.verbose else logging.INFO
 os.environ['MXNET_GPU_MEM_POOL_TYPE'] = 'Round'
+os.environ['MXNET_SAFE_ACCUMULATION'] = '1'
 
 class DataParallelBERT(nlp.utils.Parallelizable):
     """Data parallel BERT model.
@@ -196,17 +197,17 @@ class DataParallelBERT(nlp.utils.Parallelizable):
 def init_comm(backend):
     """Init communication backend"""
     # backend specific implementation
-    if backend == 'horovod':
+    if backend == 'smddp':
         try:
-            import horovod.mxnet as hvd  # pylint: disable=import-outside-toplevel
+            import smdistributed.dataparallel.mxnet as dist  # pylint: disable=import-outside-toplevel
         except ImportError:
-            logging.info('horovod must be installed.')
+            logging.info('smddp must be installed.')
             sys.exit(1)
-        hvd.init()
+        dist.init()
         store = None
-        num_workers = hvd.size()
-        rank = hvd.rank()
-        local_rank = hvd.local_rank()
+        num_workers = dist.size()
+        rank = dist.rank()
+        local_rank = dist.local_rank()
         is_master_node = rank == local_rank
         ctxs = [mx.gpu(local_rank)]
     else:
@@ -223,10 +224,15 @@ def init_comm(backend):
 backend = args.comm_backend
 store, num_workers, rank, local_rank, is_master_node, ctxs = init_comm(backend)
 
+import socket
 filename = os.path.join(args.ckpt_dir,
-                        ('phase1_log.' if not args.phase2 else 'phase2_log.') + str(rank))
+                        ('phase1_log.' if not args.phase2 else 'phase2_log.') + str(rank) + '.' + socket.gethostname())
 logging.basicConfig(filename=filename)
 logging.getLogger().setLevel(level)
+
+if is_master_node and local_rank == 0:
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+
 logging.info(args)
 logging.info(os.environ)
 
@@ -241,8 +247,8 @@ def train(data_train, data_eval, model):
     """Training function."""
     # backend specific implementation
     param_dict = model.bert.collect_params()
-    if backend == 'horovod':
-        hvd.broadcast_parameters(param_dict, root_rank=0)
+    #if backend == 'smddp':
+    #    dist.broadcast_parameters(param_dict, root_rank=0)
 
     mlm_metric = nlp.metric.MaskedAccuracy()
     nsp_metric = nlp.metric.MaskedAccuracy()
@@ -262,8 +268,9 @@ def train(data_train, data_eval, model):
         loss_scale_param = None
 
     # backend specific implementation
-    if backend == 'horovod':
-        trainer = hvd.DistributedTrainer(param_dict, args.optimizer, optim_params)
+    if backend == 'smddp':
+        opt = mx.optimizer.create(args.optimizer, **optim_params)
+        trainer = dist.DistributedTrainer(param_dict, opt)
     else:
         trainer = mx.gluon.Trainer(param_dict, args.optimizer, optim_params,
                                    update_on_kvstore=False)
@@ -306,8 +313,7 @@ def train(data_train, data_eval, model):
     parallel = nlp.utils.Parallel(num_ctxes if num_ctxes > 1 else 0, parallel_model)
 
     while step_num < num_train_steps:
-
-        data_train_iter = iter(data_train)
+        data_train_iter = iter(data_train) # data_train is type DatasetLoader, data_train_iter is _MultiBatchWorkerIter
         end_of_batch = False
         next_data_batch = next(data_train_iter)
         while not end_of_batch:
@@ -347,17 +353,23 @@ def train(data_train, data_eval, model):
                 running_nsp_loss += ls2.as_in_context(mx.cpu()) / len(ctxs)
                 running_num_tks += valid_length.sum().as_in_context(mx.cpu())
             # pre fetch next batch
+            logging.debug('fetch mini-batch step_num %d rank %d', step_num, rank)
             try:
                 next_data_batch = next(data_train_iter)
+                logging.debug('fetch complete')
             except StopIteration:
+                logging.debug('stop iteration')
                 end_of_batch = True
 
             # update
+            logging.debug('allreduce step_num %d rank %d', step_num, rank)
             if (batch_num + 1) % accumulate == 0:
                 fp16_trainer.step(1, max_norm=1.0 * num_workers)
+                logging.debug('allreduce complete')
                 if accumulate > 1:
                     param_dict.zero_grad()
             # update metrics
+            logging.debug('metric step_num %d', step_num)
             if args.no_compute_acc:
                 mask_pred_list[0].wait_to_read()
             else:
