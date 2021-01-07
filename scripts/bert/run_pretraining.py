@@ -108,7 +108,7 @@ parser.add_argument('--profile', type=str, default=None,
 # data pre-processing
 parser.add_argument('--num_buckets', type=int, default=1,
                     help='Number of buckets for variable length sequence sampling')
-parser.add_argument('--raw', type=bool, default=False,
+parser.add_argument('--raw', action='store_true',
                     help='If set, both training and dev samples are generated on-the-fly '
                          'from raw texts instead of pre-processed npz files. ')
 parser.add_argument('--max_seq_length', type=int, default=512,
@@ -229,6 +229,10 @@ filename = os.path.join(args.ckpt_dir,
                         ('phase1_log.' if not args.phase2 else 'phase2_log.') + str(rank) + '.' + socket.gethostname())
 logging.basicConfig(filename=filename)
 logging.getLogger().setLevel(level)
+
+if is_master_node and local_rank == 0:
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+
 logging.info(args)
 logging.info(os.environ)
 
