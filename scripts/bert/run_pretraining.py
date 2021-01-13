@@ -99,14 +99,14 @@ parser.add_argument('--data_eval', type=str, required=True,
                          'dir/*.dev is accepted.')
 parser.add_argument('--eval_use_npz', action='store_true',
                     help='Set to True if --data_eval provides npz files instead of raw text files')
-parser.add_argument('--skip_save_states', action='store_true',
-                    help='Skip saving training states')
 # debugging
 parser.add_argument('--synthetic_data', action='store_true',
                     help='If provided, synthetic data is used for training')
 parser.add_argument('--verbose', action='store_true', help='verbose logging')
 parser.add_argument('--profile', type=str, default=None,
                     help='output profiling result to the provided file path')
+parser.add_argument('--skip_save_states', action='store_true',
+                    help='Skip saving training states')
 # data pre-processing
 parser.add_argument('--num_buckets', type=int, default=1,
                     help='Number of buckets for variable length sequence sampling')
