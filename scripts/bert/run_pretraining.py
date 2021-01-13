@@ -99,6 +99,8 @@ parser.add_argument('--data_eval', type=str, required=True,
                          'dir/*.dev is accepted.')
 parser.add_argument('--eval_use_npz', action='store_true',
                     help='Set to True if --data_eval provides npz files instead of raw text files')
+parser.add_argument('--skip_save_states', action='store_true',
+                    help='Skip saving training states')
 # debugging
 parser.add_argument('--synthetic_data', action='store_true',
                     help='If provided, synthetic data is used for training')
@@ -158,6 +160,8 @@ args = parser.parse_args()
 nlp.utils.mkdir(args.ckpt_dir)
 level = logging.DEBUG if args.verbose else logging.INFO
 os.environ['MXNET_GPU_MEM_POOL_TYPE'] = 'Round'
+# safe accumulation should always be enabled
+os.environ['MXNET_SAFE_ACCUMULATION'] = '1'
 
 class DataParallelBERT(nlp.utils.Parallelizable):
     """Data parallel BERT model.
@@ -227,6 +231,10 @@ filename = os.path.join(args.ckpt_dir,
                         ('phase1_log.' if not args.phase2 else 'phase2_log.') + str(rank))
 logging.basicConfig(filename=filename)
 logging.getLogger().setLevel(level)
+
+if is_master_node and local_rank == 0:
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+
 logging.info(args)
 logging.info(os.environ)
 
@@ -382,7 +390,8 @@ def train(data_train, data_eval, model):
             # saving checkpoints
             if step_num % args.ckpt_interval == 0 and (batch_num + 1) % accumulate == 0:
                 if is_master_node:
-                    save_states(step_num, trainer, args.ckpt_dir, local_rank)
+                    if not args.skip_save_states:
+                        save_states(step_num, trainer, args.ckpt_dir, local_rank)
                     if local_rank == 0:
                         save_parameters(step_num, model.bert, args.ckpt_dir)
             if step_num % args.eval_interval == 0 and data_eval \
@@ -395,7 +404,8 @@ def train(data_train, data_eval, model):
             batch_num += 1
 
     if is_master_node:
-        save_states(step_num, trainer, args.ckpt_dir, local_rank)
+        if not args.skip_save_states:
+            save_states(step_num, trainer, args.ckpt_dir, local_rank)
         if local_rank == 0:
             save_parameters(step_num, model.bert, args.ckpt_dir)
     mx.nd.waitall()
