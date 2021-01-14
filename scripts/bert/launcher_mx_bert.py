@@ -33,7 +33,7 @@ if __name__ == '__main__':
         "data": '/'.join([SM_DATA_ROOT, 'bert/train']),
         "data_eval": '/'.join([SM_DATA_ROOT, 'bert/eval']),
         "ckpt_dir": '/'.join([SM_DATA_ROOT, 'ckpt_dir']),
-        "comm_backend": "smddp",
+        "comm_backend": "horovod",
         "model": "bert_24_1024_16",
         "total_batch_size": instance_count * 256,
         "total_batch_size_eval": instance_count * 256,
