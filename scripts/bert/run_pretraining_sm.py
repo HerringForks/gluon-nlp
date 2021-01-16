@@ -130,7 +130,6 @@ def main():
     parser.add_argument('--gpus', type=str, default=None,
                         help='List of gpus to run when device or dist_sync_device is used for '
                              'communication, e.g. 0 or 0,2,5. empty means using cpu.')
-    args = parser.parse_args()
 
     flags, unknown = parser.parse_known_args()
     main_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'run_pretraining.py'))

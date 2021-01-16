@@ -39,9 +39,9 @@ if __name__ == '__main__':
         "total_batch_size_eval": instance_count * 256,
         "max_seq_length": 128,
         "max_predictions_per_seq": 20,
-        'log_interval': 10,
-        "lr": 0.0001,
-        "num_steps": 2000,
+        'log_interval': 1,
+        "lr": 0.0002,
+        "num_steps": 10000,
         'warmup_ratio': 1,
         "raw": '',
         "skip_save_states": ''
@@ -56,6 +56,7 @@ if __name__ == '__main__':
     }
 
     estimator = MXNet(entry_point='run_pretraining_sm.py',
+                        max_run=7200,
                         role=role,
                         image_uri=docker_image,
                         source_dir='.',
