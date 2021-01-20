@@ -30,12 +30,13 @@ This example shows how to pre-train a BERT model with Gluon NLP Toolkit.
 
 import os
 import sys
-import random
 import warnings
 import logging
 import functools
 import time
 import argparse
+import random
+import numpy as np
 
 import mxnet as mx
 import gluonnlp as nlp
@@ -450,6 +451,8 @@ if __name__ == '__main__':
 
     random_seed = args.seed
     logging.debug('Random seed set to %d', random_seed)
+    random.seed(random_seed)
+    np.random.seed(random_seed)
     mx.random.seed(random_seed)
 
     if args.data:
