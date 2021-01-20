@@ -1,3 +1,4 @@
+import argparse
 import os
 import boto3
 import sagemaker
@@ -21,13 +22,30 @@ if __name__ == '__main__':
     security_group_ids = ['sg-01a3bc0056722f294']
     fsx_id = 'fs-0136b25df4e8b2abd'
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--instance-type', type=str, default='ml.p3dn.24xlarge')
+    parser.add_argument('--instance-count', type=int, default=8)
+    parser.add_argument('--mode', type=str, default='perf')
+    args, _ = parser.parse_known_args()
+
     # copy of 578276202366.dkr.ecr.us-west-2.amazonaws.com/karjar-mxnet-herring-sagemaker:1.8.0-gpu-py37-cu110-ubuntu16.04-2020-12-22-02-25-33
     docker_image='578276202366.dkr.ecr.us-east-1.amazonaws.com/muziy-mx1.8-smd:base'
 
-    instance_count = 8
-    instance_type = "ml.p3dn.24xlarge"
-
     SM_DATA_ROOT = '/opt/ml/input/data/train'
+
+    if args.mode == 'perf':
+        log_interval = 1
+        lr = 0.00176
+        num_steps = 2000
+        warmup_ratio = 1
+        timeout = 5400
+    elif args.mode == 'full':
+        # 8 node full run config from LAMB paper https://arxiv.org/pdf/1904.00962.pdf
+        log_interval = 250
+        lr = 0.00176
+        num_steps = 112500
+        warmup_ratio = 0.025
+        timeout = 172800 # 2 day
 
     hyperparameters={
         "data": '/'.join([SM_DATA_ROOT, 'bert/train']),
@@ -35,16 +53,17 @@ if __name__ == '__main__':
         "ckpt_dir": '/'.join([SM_DATA_ROOT, 'ckpt_dir']),
         "comm_backend": "smddp",
         "model": "bert_24_1024_16",
-        "total_batch_size": instance_count * 256,
-        "total_batch_size_eval": instance_count * 256,
+        "total_batch_size": args.instance_count * 512,
+        "total_batch_size_eval": args.instance_count * 512,
         "max_seq_length": 128,
         "max_predictions_per_seq": 20,
-        'log_interval': 1,
-        "lr": 0.0002,
-        "num_steps": 10000,
-        'warmup_ratio': 1,
+        'log_interval': log_interval,
+        "lr": lr,
+        "num_steps": num_steps,
+        'warmup_ratio': warmup_ratio,
         "raw": '',
-        "skip_save_states": ''
+        "skip_save_states": '',
+        "seed": 987
     }
 
     distribution = {
@@ -56,12 +75,12 @@ if __name__ == '__main__':
     }
 
     estimator = MXNet(entry_point='run_pretraining_sm.py',
-                        max_run=7200,
+                        max_run=timeout,
                         role=role,
                         image_uri=docker_image,
                         source_dir='.',
-                        train_instance_count=instance_count,
-                        train_instance_type=instance_type,
+                        train_instance_count=args.instance_count,
+                        train_instance_type=args.instance_type,
                         sagemaker_session=sagemaker_session,
                         hyperparameters=hyperparameters,
                         distribution=distribution,
