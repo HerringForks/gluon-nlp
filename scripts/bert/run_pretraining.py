@@ -89,6 +89,7 @@ parser.add_argument('--warmup_ratio', type=float, default=0.01,
 parser.add_argument('--dtype', type=str, default='float16', help='data dtype')
 parser.add_argument('--no_compute_acc', action='store_true',
                     help='skip accuracy metric computation during training')
+parser.add_argument('--seed', type=int, default=random.randint(0, 1000), help='random seed for training')
 # validation
 parser.add_argument('--eval_interval', type=int, default=50000, help='Evaluation interval')
 parser.add_argument('--total_batch_size_eval', type=int, default=256,
@@ -377,11 +378,11 @@ def train(data_train, data_eval, model):
                 if args.no_compute_acc:
                     log_noacc(begin_time, running_num_tks, running_mlm_loss / accumulate,
                               running_nsp_loss / accumulate, step_num,
-                              trainer, args.log_interval)
+                              trainer, args.log_interval, args.total_batch_size)
                 else:
                     log(begin_time, running_num_tks, running_mlm_loss / accumulate,
                         running_nsp_loss / accumulate, step_num, mlm_metric, nsp_metric,
-                        trainer, args.log_interval)
+                        trainer, args.log_interval, args.total_batch_size)
                     mlm_metric.reset_local()
                     nsp_metric.reset_local()
                 begin_time = time.time()
@@ -399,7 +400,7 @@ def train(data_train, data_eval, model):
                 # eval data is always based on a fixed npz file.
                 dataset_eval = get_pretrain_data_npz(data_eval, batch_size_eval,
                                                      1, False, 1, vocab)
-                evaluate(dataset_eval, model, ctxs, args.log_interval, args.dtype)
+                evaluate(dataset_eval, model, ctxs, args.log_interval, args.dtype, args.total_batch_size_eval)
 
             batch_num += 1
 
@@ -413,7 +414,6 @@ def train(data_train, data_eval, model):
     logging.info('Train cost={:.1f}s'.format(train_end_time - train_begin_time))
 
 if __name__ == '__main__':
-    random_seed = random.randint(0, 1000)
 
     dataset_name, vocab = args.dataset_name, None
     if args.sentencepiece:
@@ -448,6 +448,7 @@ if __name__ == '__main__':
             if not os.path.isfile(cache_file) and rank == 0:
                 generate_dev_set(tokenizer, vocab, cache_file, args)
 
+    random_seed = args.seed
     logging.debug('Random seed set to %d', random_seed)
     mx.random.seed(random_seed)
 
@@ -486,4 +487,4 @@ if __name__ == '__main__':
         shuffle = False
         dataset_eval = get_pretrain_data_npz(data_eval, batch_size_eval,
                                              len(ctxs), shuffle, 1, vocab)
-        evaluate(dataset_eval, model, ctxs, args.log_interval, args.dtype)
+        evaluate(dataset_eval, model, ctxs, args.log_interval, args.dtype, args.total_batch_size_eval)
