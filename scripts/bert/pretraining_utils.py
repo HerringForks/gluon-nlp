@@ -344,7 +344,7 @@ def save_states(step_num, trainer, ckpt_dir, local_rank=0):
     nlp.utils.save_states(trainer, trainer_path)
 
 def log_noacc(begin_time, running_num_tks, running_mlm_loss, running_nsp_loss, step_num,
-              trainer, log_interval):
+              trainer, log_interval, total_batch_size):
     """Log training progress."""
     end_time = time.time()
     duration = end_time - begin_time
@@ -352,14 +352,17 @@ def log_noacc(begin_time, running_num_tks, running_mlm_loss, running_nsp_loss, s
     running_mlm_loss = running_mlm_loss / log_interval
     running_nsp_loss = running_nsp_loss / log_interval
     lr = trainer.learning_rate if trainer else 0
+    latency_sec = duration / log_interval
+    it_per_sec = 1 / latency_sec
+    seq_per_sec = it_per_sec * total_batch_size
     # pylint: disable=line-too-long
-    logging.info('[step {}]\tmlm_loss={:7.5f}\tnsp_loss={:5.2f}\tthroughput={:.1f}K tks/s\tlr={:.7f} time={:.2f}, latency={:.1f} ms/step'
+    logging.info('[step {}]\tmlm_loss={:7.5f}\tnsp_loss={:5.2f}\tthroughput={:.1f}K tks/s\tlr={:.7f} time={:.2f}, latency={:.1f} ms/step, iteration={:.2f} it/s, sequence={:.1f} seq/sec'
                  .format(step_num, running_mlm_loss.asscalar(), running_nsp_loss.asscalar(),
-                         throughput.asscalar(), lr, duration, duration*1000/log_interval))
+                         throughput.asscalar(), lr, duration, latency_sec*1000, it_per_sec, seq_per_sec))
     # pylint: enable=line-too-long
 
 def log(begin_time, running_num_tks, running_mlm_loss, running_nsp_loss, step_num,
-        mlm_metric, nsp_metric, trainer, log_interval):
+        mlm_metric, nsp_metric, trainer, log_interval, total_batch_size):
     """Log training progress."""
     end_time = time.time()
     duration = end_time - begin_time
@@ -367,10 +370,13 @@ def log(begin_time, running_num_tks, running_mlm_loss, running_nsp_loss, step_nu
     running_mlm_loss = running_mlm_loss / log_interval
     running_nsp_loss = running_nsp_loss / log_interval
     lr = trainer.learning_rate if trainer else 0
+    latency_sec = duration / log_interval
+    it_per_sec = 1 / latency_sec
+    seq_per_sec = it_per_sec * total_batch_size
     # pylint: disable=line-too-long
-    logging.info('[step {}]\tmlm_loss={:7.5f}\tmlm_acc={:4.2f}\tnsp_loss={:5.2f}\tnsp_acc={:5.2f}\tthroughput={:.1f}K tks/s\tlr={:.7f} time={:.2f}, latency={:.1f} ms/step'
+    logging.info('[step {}]\tmlm_loss={:7.5f}\tmlm_acc={:4.2f}\tnsp_loss={:5.2f}\tnsp_acc={:5.2f}\tthroughput={:.1f}K tks/s\tlr={:.7f} time={:.2f}, latency={:.1f} ms/step, iteration={:.2f} it/s, sequence={:.1f} seq/sec'
                  .format(step_num, running_mlm_loss.asscalar(), mlm_metric.get()[1] * 100, running_nsp_loss.asscalar(),
-                         nsp_metric.get()[1] * 100, throughput.asscalar(), lr, duration, duration*1000/log_interval))
+                         nsp_metric.get()[1] * 100, throughput.asscalar(), lr, duration, latency_sec*1000, it_per_sec, seq_per_sec))
     # pylint: enable=line-too-long
 
 
@@ -422,7 +428,7 @@ class BERTForPretrain(mx.gluon.Block):
         return classified, decoded, ls1, ls2
 
 
-def evaluate(data_eval, model, ctx, log_interval, dtype):
+def evaluate(data_eval, model, ctx, log_interval, dtype, total_batch_size_eval):
     """Evaluation function."""
     logging.info('Running evaluation ... ')
     mlm_metric = nlp.metric.MaskedAccuracy()
@@ -468,7 +474,7 @@ def evaluate(data_eval, model, ctx, log_interval, dtype):
             total_mlm_loss += running_mlm_loss
             total_nsp_loss += running_nsp_loss
             log(begin_time, running_num_tks, running_mlm_loss, running_nsp_loss,
-                step_num, mlm_metric, nsp_metric, None, log_interval)
+                step_num, mlm_metric, nsp_metric, None, log_interval, total_batch_size_eval)
             begin_time = time.time()
             running_mlm_loss = running_nsp_loss = running_num_tks = 0
             mlm_metric.reset_local()

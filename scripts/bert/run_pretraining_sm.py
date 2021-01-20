@@ -23,6 +23,7 @@ import os
 import shutil
 import subprocess
 from argparse import ArgumentError
+import random
 
 def main():
     # CLI flags
@@ -65,6 +66,7 @@ def main():
     parser.add_argument('--dtype', type=str, default='float16', help='data dtype')
     parser.add_argument('--no_compute_acc', action='store_true',
                         help='skip accuracy metric computation during training')
+    parser.add_argument('--seed', type=int, default=random.randint(0, 1000), help='random seed for training')
     # validation
     parser.add_argument('--eval_interval', type=int, default=50000, help='Evaluation interval')
     parser.add_argument('--total_batch_size_eval', type=int, default=256,
@@ -160,6 +162,7 @@ def main():
         f' --max_predictions_per_seq={flags.max_predictions_per_seq}'
         f' --circle_length={flags.circle_length}'
         f' --comm_backend={flags.comm_backend}'
+        f' --seed={flags.seed}'
         f' {"--no_compute_acc" if flags.no_compute_acc else ""}'
         f' {"--eval_use_npz" if flags.eval_use_npz else ""}'
         f' {"--verbose" if flags.verbose else ""}'
