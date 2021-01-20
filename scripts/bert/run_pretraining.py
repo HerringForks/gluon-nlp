@@ -412,8 +412,6 @@ def train(data_train, data_eval, model):
     logging.info('Train cost={:.1f}s'.format(train_end_time - train_begin_time))
 
 if __name__ == '__main__':
-    #random_seed = int(args.seed) if args.seed is not None else random.randint(0, 1000)
-    random_seed = args.seed
 
     dataset_name, vocab = args.dataset_name, None
     if args.sentencepiece:
@@ -448,6 +446,7 @@ if __name__ == '__main__':
             if not os.path.isfile(cache_file) and rank == 0:
                 generate_dev_set(tokenizer, vocab, cache_file, args)
 
+    random_seed = args.seed
     logging.debug('Random seed set to %d', random_seed)
     mx.random.seed(random_seed)
 
