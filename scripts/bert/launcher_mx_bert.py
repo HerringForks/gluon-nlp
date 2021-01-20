@@ -39,7 +39,7 @@ if __name__ == '__main__':
         num_steps = 2000
         warmup_ratio = 1
         timeout = 5400
-    elif args.mode = 'full':
+    elif args.mode == 'full':
         # 8 node full run config from LAMB paper https://arxiv.org/pdf/1904.00962.pdf
         log_interval = 250
         lr = 0.00176
