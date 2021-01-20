@@ -39,7 +39,7 @@ if __name__ == '__main__':
         num_steps = 2000
         warmup_ratio = 1
         timeout = 5400
-    elif args.mode = 'full':
+    elif args.mode == 'full':
         # 8 node full run config from LAMB paper https://arxiv.org/pdf/1904.00962.pdf
         log_interval = 250
         lr = 0.00176
@@ -79,8 +79,8 @@ if __name__ == '__main__':
                         role=role,
                         image_uri=docker_image,
                         source_dir='.',
-                        train_instance_count=instance_count,
-                        train_instance_type=instance_type,
+                        train_instance_count=args.instance_count,
+                        train_instance_type=args.instance_type,
                         sagemaker_session=sagemaker_session,
                         hyperparameters=hyperparameters,
                         distribution=distribution,
