@@ -30,17 +30,18 @@ This example shows how to pre-train a BERT model with Gluon NLP Toolkit.
 
 import os
 import sys
-import random
 import warnings
 import logging
 import functools
 import time
 import argparse
+import random
+import numpy as np
 
 import mxnet as mx
 import gluonnlp as nlp
 try:
-    import horovod.mxnet as hvd
+    import smdistributed.dataparallel.mxnet as dist
 except ImportError:
     pass
 
@@ -89,6 +90,7 @@ parser.add_argument('--warmup_ratio', type=float, default=0.01,
 parser.add_argument('--dtype', type=str, default='float16', help='data dtype')
 parser.add_argument('--no_compute_acc', action='store_true',
                     help='skip accuracy metric computation during training')
+parser.add_argument('--seed', type=int, default=random.randint(0, 1000), help='random seed for training')
 # validation
 parser.add_argument('--eval_interval', type=int, default=50000, help='Evaluation interval')
 parser.add_argument('--total_batch_size_eval', type=int, default=256,
@@ -105,6 +107,8 @@ parser.add_argument('--synthetic_data', action='store_true',
 parser.add_argument('--verbose', action='store_true', help='verbose logging')
 parser.add_argument('--profile', type=str, default=None,
                     help='output profiling result to the provided file path')
+parser.add_argument('--skip_save_states', action='store_true',
+                    help='Skip saving training states')
 # data pre-processing
 parser.add_argument('--num_buckets', type=int, default=1,
                     help='Number of buckets for variable length sequence sampling')
@@ -147,7 +151,7 @@ parser.add_argument('--phase2', action='store_true', help='phase 2 training')
 parser.add_argument('--phase1_num_steps', type=int, help='number of steps for phase 1')
 # communication
 parser.add_argument('--comm_backend', type=str, default='device',
-                    choices=['horovod', 'dist_sync_device', 'device'],
+                    choices=['smddp', 'dist_sync_device', 'device'],
                     help='Communication backend.')
 parser.add_argument('--gpus', type=str, default=None,
                     help='List of gpus to run when device or dist_sync_device is used for '
@@ -158,6 +162,8 @@ args = parser.parse_args()
 nlp.utils.mkdir(args.ckpt_dir)
 level = logging.DEBUG if args.verbose else logging.INFO
 os.environ['MXNET_GPU_MEM_POOL_TYPE'] = 'Round'
+# safe accumulation should always be enabled
+os.environ['MXNET_SAFE_ACCUMULATION'] = '1'
 
 class DataParallelBERT(nlp.utils.Parallelizable):
     """Data parallel BERT model.
@@ -196,17 +202,17 @@ class DataParallelBERT(nlp.utils.Parallelizable):
 def init_comm(backend):
     """Init communication backend"""
     # backend specific implementation
-    if backend == 'horovod':
+    if backend == 'smddp':
         try:
-            import horovod.mxnet as hvd  # pylint: disable=import-outside-toplevel
+            import smdistributed.dataparallel.mxnet as dist  # pylint: disable=import-outside-toplevel
         except ImportError:
-            logging.info('horovod must be installed.')
+            logging.info('Sagemaker Distributed Dataparallel library must be installed.')
             sys.exit(1)
-        hvd.init()
+        dist.init()
         store = None
-        num_workers = hvd.size()
-        rank = hvd.rank()
-        local_rank = hvd.local_rank()
+        num_workers = dist.size()
+        rank = dist.rank()
+        local_rank = dist.local_rank()
         is_master_node = rank == local_rank
         ctxs = [mx.gpu(local_rank)]
     else:
@@ -227,6 +233,10 @@ filename = os.path.join(args.ckpt_dir,
                         ('phase1_log.' if not args.phase2 else 'phase2_log.') + str(rank))
 logging.basicConfig(filename=filename)
 logging.getLogger().setLevel(level)
+
+if is_master_node and local_rank == 0:
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+
 logging.info(args)
 logging.info(os.environ)
 
@@ -241,8 +251,6 @@ def train(data_train, data_eval, model):
     """Training function."""
     # backend specific implementation
     param_dict = model.bert.collect_params()
-    if backend == 'horovod':
-        hvd.broadcast_parameters(param_dict, root_rank=0)
 
     mlm_metric = nlp.metric.MaskedAccuracy()
     nsp_metric = nlp.metric.MaskedAccuracy()
@@ -262,8 +270,8 @@ def train(data_train, data_eval, model):
         loss_scale_param = None
 
     # backend specific implementation
-    if backend == 'horovod':
-        trainer = hvd.DistributedTrainer(param_dict, args.optimizer, optim_params)
+    if backend == 'smddp':
+        trainer = dist.DistributedTrainer(param_dict, args.optimizer, optim_params)
     else:
         trainer = mx.gluon.Trainer(param_dict, args.optimizer, optim_params,
                                    update_on_kvstore=False)
@@ -369,11 +377,11 @@ def train(data_train, data_eval, model):
                 if args.no_compute_acc:
                     log_noacc(begin_time, running_num_tks, running_mlm_loss / accumulate,
                               running_nsp_loss / accumulate, step_num,
-                              trainer, args.log_interval)
+                              trainer, args.log_interval, args.total_batch_size)
                 else:
                     log(begin_time, running_num_tks, running_mlm_loss / accumulate,
                         running_nsp_loss / accumulate, step_num, mlm_metric, nsp_metric,
-                        trainer, args.log_interval)
+                        trainer, args.log_interval, args.total_batch_size)
                     mlm_metric.reset_local()
                     nsp_metric.reset_local()
                 begin_time = time.time()
@@ -382,7 +390,8 @@ def train(data_train, data_eval, model):
             # saving checkpoints
             if step_num % args.ckpt_interval == 0 and (batch_num + 1) % accumulate == 0:
                 if is_master_node:
-                    save_states(step_num, trainer, args.ckpt_dir, local_rank)
+                    if not args.skip_save_states:
+                        save_states(step_num, trainer, args.ckpt_dir, local_rank)
                     if local_rank == 0:
                         save_parameters(step_num, model.bert, args.ckpt_dir)
             if step_num % args.eval_interval == 0 and data_eval \
@@ -390,12 +399,13 @@ def train(data_train, data_eval, model):
                 # eval data is always based on a fixed npz file.
                 dataset_eval = get_pretrain_data_npz(data_eval, batch_size_eval,
                                                      1, False, 1, vocab)
-                evaluate(dataset_eval, model, ctxs, args.log_interval, args.dtype)
+                evaluate(dataset_eval, model, ctxs, args.log_interval, args.dtype, args.total_batch_size_eval)
 
             batch_num += 1
 
     if is_master_node:
-        save_states(step_num, trainer, args.ckpt_dir, local_rank)
+        if not args.skip_save_states:
+            save_states(step_num, trainer, args.ckpt_dir, local_rank)
         if local_rank == 0:
             save_parameters(step_num, model.bert, args.ckpt_dir)
     mx.nd.waitall()
@@ -403,7 +413,6 @@ def train(data_train, data_eval, model):
     logging.info('Train cost={:.1f}s'.format(train_end_time - train_begin_time))
 
 if __name__ == '__main__':
-    random_seed = random.randint(0, 1000)
 
     dataset_name, vocab = args.dataset_name, None
     if args.sentencepiece:
@@ -438,7 +447,10 @@ if __name__ == '__main__':
             if not os.path.isfile(cache_file) and rank == 0:
                 generate_dev_set(tokenizer, vocab, cache_file, args)
 
+    random_seed = args.seed
     logging.debug('Random seed set to %d', random_seed)
+    random.seed(random_seed)
+    np.random.seed(random_seed)
     mx.random.seed(random_seed)
 
     if args.data:
@@ -476,4 +488,4 @@ if __name__ == '__main__':
         shuffle = False
         dataset_eval = get_pretrain_data_npz(data_eval, batch_size_eval,
                                              len(ctxs), shuffle, 1, vocab)
-        evaluate(dataset_eval, model, ctxs, args.log_interval, args.dtype)
+        evaluate(dataset_eval, model, ctxs, args.log_interval, args.dtype, args.total_batch_size_eval)
